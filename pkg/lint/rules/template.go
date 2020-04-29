@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/pkg/errors"
@@ -127,6 +128,11 @@ func Templates(linter *support.Linter, values map[string]interface{}, namespace 
 			// key will be raised as well
 			err := yaml.Unmarshal([]byte(renderedContent), &yamlStruct)
 
+			if err != nil {
+				re := regexp.MustCompile(`YAML to JSON: yaml: line (\d+)`)
+				err = getHighlightedContext(&renderedContent, err, re, 3)
+			}
+
 			// If YAML linting fails, we sill progress. So we don't capture the returned state
 			// on this linter run.
 			linter.RunLinterRule(support.ErrorSev, path, validateYamlContent(err))
@@ -183,6 +189,46 @@ func validateNoReleaseTime(manifest []byte) error {
 		return errors.New(".Release.Time has been removed in v3, please replace with the `now` function in your templates")
 	}
 	return nil
+}
+
+// Takes a multiline string and returns a highlighted slice of that string.
+// The lineStr is typically an error string noting line number of the error.
+// The Regexp should find the line number and return a single match.
+// contextLines defines how many lines around the error to include.
+func getHighlightedContext(source *string, err error, re *regexp.Regexp, contextLines int) error {
+
+	if err == nil { return nil }
+
+	lineNum, _ := strconv.Atoi(string(re.FindSubmatch([]byte(err.Error()))[1]))
+
+	lines := strings.Split(*source, "\n")
+
+	targetIdx := lineNum - 1
+
+	contextStart := targetIdx - contextLines
+	if contextStart < 0 {
+		targetIdx = contextStart + contextLines
+		contextStart = 0
+	} else {
+		targetIdx = lineNum - contextStart - 1
+	}
+	contextEnd := lineNum + contextLines
+	if contextEnd > len(lines) - 1 {
+		contextEnd = len(lines) - 1
+	}
+	context := lines[contextStart:contextEnd]
+
+	for idx, line := range context {
+		if idx == targetIdx {
+			// Highlight the target line
+			context[idx] = fmt.Sprintf("* %s", line)
+		} else {
+			context[idx] = fmt.Sprintf("  %s", line)
+		}
+	}
+
+	context = append([]string{err.Error()}, context...)
+	return errors.New(strings.Join(context, ",\n"))
 }
 
 // K8sYamlStruct stubs a Kubernetes YAML file.
